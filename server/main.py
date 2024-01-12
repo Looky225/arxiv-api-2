@@ -5,6 +5,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Depends, Body, UploadFil
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
+import arxiv
 
 from models.api import (
     DeleteRequest,
@@ -70,6 +71,43 @@ async def upsert_file(
         logger.error(e)
         raise HTTPException(status_code=500, detail=f"str({e})")
 
+@app.post(
+    "/download-and-upsert-arxiv",
+    response_model=UpsertResponse,
+)
+async def download_and_upsert_arxiv(
+    search_id: str,  # Ajoutez un paramètre pour le numéro de recherche arXiv
+    metadata: Optional[str] = Form(None),
+):
+    try:
+        # Utilisez le numéro de recherche arXiv pour récupérer le papier correspondant
+        paper = next(arxiv.Client().results(arxiv.Search(id_list=[search_id])))
+
+        # Téléchargez le PDF dans le répertoire de travail avec un nom de fichier personnalisé.
+        # Vous pouvez personnaliser davantage le nom du fichier si nécessaire.
+        pdf_filename = f"{search_id}.pdf"
+        paper.download_pdf(filename=pdf_filename)
+
+        # Créez un objet DocumentMetadata à partir des métadonnées fournies (si disponibles)
+        try:
+            metadata_obj = (
+                DocumentMetadata.parse_raw(metadata)
+                if metadata
+                else DocumentMetadata(source=Source.file)
+            )
+        except:
+            metadata_obj = DocumentMetadata(source=Source.file)
+
+        # Utilisez la fonction my_get_document_from_file pour obtenir un objet Document à partir du fichier téléchargé
+        document = await get_document_from_file(pdf_filename, metadata_obj)
+
+        # Utilisez la datastore pour ajouter le document à la base de données
+        ids = await datastore.upsert([document])
+
+        return UpsertResponse(ids=ids)
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(status_code=500, detail=f"str({e})")
 
 @app.post(
     "/upsert",
@@ -81,6 +119,46 @@ async def upsert(
     try:
         ids = await datastore.upsert(request.documents)
         return UpsertResponse(ids=ids)
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(status_code=500, detail="Internal Service Error")
+
+@sub_app.post(
+    "/upsert",
+    response_model=UpsertResponse,
+    # NOTE: We are describing the shape of the API endpoint input due to a current limitation in parsing arrays of objects from OpenAPI schemas. This will not be necessary in the future.
+    description="Save chat information. Accepts an array of documents with text (potential questions + conversation text), metadata (source 'chat' and timestamp, no ID as this will be generated). Confirm with the user before saving, ask for more details/context.",
+)
+async def upsert(
+    request: UpsertRequest = Body(...),
+    token: HTTPAuthorizationCredentials = Depends(validate_token),
+):
+    try:
+        # Séparez les documents de mémoire des autres documents
+        memory_documents = []
+        chat_documents = []
+
+        for document in request.documents:
+            if document.metadata.source == "memory":
+                memory_documents.append(document)
+            elif document.metadata.source == "chat":
+                chat_documents.append(document)
+
+        # Sauvegardez les documents de mémoire dans la base de données de vecteurs
+        if memory_documents:
+            memory_ids = await datastore.upsert(memory_documents)
+        else:
+            memory_ids = []
+
+        # Vous pouvez également effectuer d'autres actions ici, par exemple, marquer la conversation comme enregistrée en mémoire.
+
+        # Pour le reste des documents (documents de conversation), procédez comme d'habitude
+        if chat_documents:
+            chat_ids = await datastore.upsert(chat_documents)
+        else:
+            chat_ids = []
+
+        return UpsertResponse(ids=memory_ids + chat_ids)
     except Exception as e:
         logger.error(e)
         raise HTTPException(status_code=500, detail="Internal Service Error")

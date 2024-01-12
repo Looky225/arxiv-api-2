@@ -8,29 +8,14 @@ import docx2txt
 import csv
 import pptx
 from loguru import logger
-from typing import Union
-import chardet
-
 
 from models.models import Document, DocumentMetadata
 
 
-
-async def get_document_from_file(
-    file_or_str: Union[UploadFile, str], metadata: DocumentMetadata
+async def my_get_document_from_file(
+    file: UploadFile, metadata: DocumentMetadata
 ) -> Document:
-    if isinstance(file_or_str, str):
-        # Traitez le cas où file_or_str est une chaîne de caractères (str)
-        # Par exemple, ouvrez le fichier avec cette chaîne de caractères comme chemin d'accès.
-        # Extraire le texte comme vous le feriez pour un fichier réel.
-        extracted_text = extract_text_from_filepath(file_or_str)
-    elif isinstance(file_or_str, UploadFile):
-        # Traitez le cas où file_or_str est un objet UploadFile valide
-        # Utilisez votre logique actuelle pour extraire le texte du fichier UploadFile
-        mimetype = file_or_str.content_type
-        extracted_text = await extract_text_from_form_file(file_or_str)
-    else:
-        raise ValueError("Le type de fichier n'est pas pris en charge.")
+    extracted_text = await extract_text_from_form_file(file)
 
     doc = Document(text=extracted_text, metadata=metadata)
 
@@ -43,9 +28,6 @@ def extract_text_from_filepath(filepath: str, mimetype: Optional[str] = None) ->
     if mimetype is None:
         # Get the mimetype of the file based on its extension
         mimetype, _ = mimetypes.guess_type(filepath)
-    
-    if not mimetype:
-        raise Exception(f"Type MIME inconnu pour le fichier {filepath}")
 
     if not mimetype:
         if filepath.endswith(".md"):

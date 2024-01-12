@@ -86,6 +86,44 @@ async def upsert_file(
         logger.error(e)
         raise HTTPException(status_code=500, detail=f"str({e})")
 
+@app.post(
+    "/download-and-upsert-arxiv",
+    response_model=UpsertResponse,
+)
+async def download_and_upsert_arxiv(
+    search_id: str,  # Ajoutez un paramètre pour le numéro de recherche arXiv
+    metadata: Optional[str] = Form(None),
+):
+    try:
+        # Utilisez le numéro de recherche arXiv pour récupérer le papier correspondant
+        paper = next(arxiv.Client().results(arxiv.Search(id_list=[search_id])))
+
+        # Téléchargez le PDF dans le répertoire de travail avec un nom de fichier personnalisé.
+        # Vous pouvez personnaliser davantage le nom du fichier si nécessaire.
+        pdf_filename = f"{search_id}.pdf"
+        paper.download_pdf(filename=pdf_filename)
+
+        # Créez un objet DocumentMetadata à partir des métadonnées fournies (si disponibles)
+        try:
+            metadata_obj = (
+                DocumentMetadata.parse_raw(metadata)
+                if metadata
+                else DocumentMetadata(source=Source.file)
+            )
+        except:
+            metadata_obj = DocumentMetadata(source=Source.file)
+
+        # Utilisez la fonction my_get_document_from_file pour obtenir un objet Document à partir du fichier téléchargé
+        document = await get_document_from_file(pdf_filename, metadata_obj)
+
+        # Utilisez la datastore pour ajouter le document à la base de données
+        ids = await datastore.upsert([document])
+
+        return UpsertResponse(ids=ids)
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(status_code=500, detail=f"str({e})")
+
 
 @app.post(
     "/upsert",
